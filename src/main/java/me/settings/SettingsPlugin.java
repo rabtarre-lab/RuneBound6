@@ -9,6 +9,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Registry;
+import org.bukkit.Sound;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.command.Command;
@@ -27,8 +28,10 @@ import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -41,10 +44,13 @@ import java.util.*;
 
 public class SettingsPlugin extends JavaPlugin implements Listener, CommandExecutor {
 
-    // Неоновый жёлто-золотой, без жирности
-    private static final TextColor NEON_GOLD = TextColor.fromHexString("#FFE600");
+    // Неоновый градиент: жёлтый -> оранжевый
+    private static final TextColor NEON_YELLOW = TextColor.fromHexString("#FFF200");
+    private static final TextColor NEON_AMBER = TextColor.fromHexString("#FF9D00");
+    private static final TextColor NEON_ORANGE = TextColor.fromHexString("#FF5A00");
+
     private static final double MIN_H = 0.4, MAX_H = 1.3;
-    private static final int[] HEIGHT_SLOTS = {10, 11, 12, 13, 14, 15, 16, 19, 20, 21};
+    private static final int[] HEIGHT_SLOTS = {11, 12, 13, 14, 15, 20, 21, 22, 23, 24};
     private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.legacySection();
 
     private final Set<UUID> hiddenNick = new HashSet<>();
@@ -66,6 +72,7 @@ public class SettingsPlugin extends JavaPlugin implements Listener, CommandExecu
         @Override public Inventory getInventory() { return inv; }
     }
 
+    // ================= запуск =================
     @Override
     public void onEnable() {
         saveDefaultConfig();
@@ -81,41 +88,94 @@ public class SettingsPlugin extends JavaPlugin implements Listener, CommandExecu
 
         // обновление пинга в табе
         Bukkit.getScheduler().runTaskTimer(this, () -> {
-            for (Player p : Bukkit.getOnlinePlayers()) {
+            for (Player p : Bukkit.getOnlinePlayers())
                 if (pingShown.contains(p.getUniqueId())) updatePing(p);
-            }
         }, 40L, 40L);
     }
 
     @Override
     public void onDisable() { saveData(); }
 
-    private void updatePing(Player p) {
-        p.playerListName(LEGACY.deserialize(p.getName() + " §7" + p.getPing() + "ms"));
-    }
-
-    // ---------- команда ----------
     @Override
     public boolean onCommand(CommandSender s, Command c, String l, String[] a) {
-        if (s instanceof Player p) openMain(p);
-        else s.sendMessage("Только для игроков.");
+        if (s instanceof Player p) {
+            sound(p, Sound.BLOCK_AMETHYST_BLOCK_CHIME, 1.2f);
+            openMain(p);
+        } else s.sendMessage("Только для игроков.");
         return true;
     }
 
-    // ---------- меню ----------
-    private Component title() {
-        return Component.text("Settings", NEON_GOLD)
+    // ================= оформление =================
+    /** Плавный градиент по буквам, без жирности и курсива. */
+    private Component gradient(String text, TextColor... stops) {
+        Component out = Component.empty()
                 .decoration(TextDecoration.BOLD, false)
                 .decoration(TextDecoration.ITALIC, false);
+        int n = text.length();
+        for (int i = 0; i < n; i++) {
+            float t = n == 1 ? 0f : (float) i / (n - 1);
+            float scaled = t * (stops.length - 1);
+            int seg = Math.min((int) scaled, stops.length - 2);
+            float k = scaled - seg;
+            TextColor a = stops[seg], b = stops[seg + 1];
+            int r = Math.round(a.red() + (b.red() - a.red()) * k);
+            int g = Math.round(a.green() + (b.green() - a.green()) * k);
+            int bl = Math.round(a.blue() + (b.blue() - a.blue()) * k);
+            out = out.append(Component.text(String.valueOf(text.charAt(i)), TextColor.color(r, g, bl)));
+        }
+        return out;
     }
 
-    private ItemStack item(Material m, String name, NamedTextColor color, String... lore) {
+    private Component neon(String text) {
+        return gradient(text, NEON_YELLOW, NEON_AMBER, NEON_ORANGE);
+    }
+
+    private Component title() { return neon("Settings"); }
+
+    private void msg(Player p, String text) {
+        p.sendMessage(neon("Settings").append(LEGACY.deserialize(" §8» §f" + text)));
+    }
+
+    private void sound(Player p, Sound s, float pitch) {
+        p.playSound(p.getLocation(), s, 0.6f, pitch);
+    }
+
+    private ItemStack pane(Material m) {
         ItemStack it = new ItemStack(m);
         ItemMeta meta = it.getItemMeta();
-        meta.displayName(Component.text(name, color).decoration(TextDecoration.ITALIC, false));
+        meta.displayName(Component.text(" "));
+        meta.setHideTooltip(true);
+        it.setItemMeta(meta);
+        return it;
+    }
+
+    /** Рамка: чёрное стекло, у углов — жёлтое и оранжевое. */
+    private void fill(Inventory inv) {
+        int size = inv.getSize();
+        int rows = size / 9;
+        ItemStack black = pane(Material.BLACK_STAINED_GLASS_PANE);
+        ItemStack orange = pane(Material.ORANGE_STAINED_GLASS_PANE);
+        ItemStack yellow = pane(Material.YELLOW_STAINED_GLASS_PANE);
+        for (int s = 0; s < size; s++) {
+            int row = s / 9, col = s % 9;
+            boolean edgeRow = row == 0 || row == rows - 1;
+            boolean edgeCol = col == 0 || col == 8;
+            if (edgeRow && edgeCol) inv.setItem(s, orange);
+            else if ((edgeRow && (col == 1 || col == 7)) || (edgeCol && (row == 1 || row == rows - 2)))
+                inv.setItem(s, yellow);
+            else inv.setItem(s, black);
+        }
+    }
+
+    private ItemStack item(Material m, String name, boolean glow, String... lore) {
+        ItemStack it = new ItemStack(m);
+        ItemMeta meta = it.getItemMeta();
+        meta.displayName(neon(name));
         List<Component> l = new ArrayList<>();
-        for (String s : lore) l.add(LEGACY.deserialize("§7" + s).decoration(TextDecoration.ITALIC, false));
+        for (String s : lore) l.add(LEGACY.deserialize(s).decoration(TextDecoration.ITALIC, false));
         meta.lore(l);
+        meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES, ItemFlag.HIDE_ADDITIONAL_TOOLTIP);
+        if (glow) meta.setEnchantmentGlintOverride(true);
         it.setItemMeta(meta);
         return it;
     }
@@ -126,41 +186,79 @@ public class SettingsPlugin extends JavaPlugin implements Listener, CommandExecu
         return false;
     }
 
+    // ================= меню =================
     private void openMain(Player p) {
         UUID id = p.getUniqueId();
         Holder h = new Holder(Type.MAIN);
         Inventory inv = Bukkit.createInventory(h, 27, title());
         h.inv = inv;
+        fill(inv);
 
-        inv.setItem(10, item(Material.NAME_TAG, "Скрыть ник", NamedTextColor.YELLOW,
-                "Ник над головой: " + (hiddenNick.contains(id) ? "§cскрыт" : "§aвиден")));
-        inv.setItem(12, item(Material.LADDER, "Сменить рост", NamedTextColor.YELLOW,
-                "Текущий: §f" + heights.getOrDefault(id, 1.0),
-                canHeight(p) ? "§aНажми, чтобы выбрать" : "§cТолько для Sponsor и Sponsor+"));
-        inv.setItem(14, item(Material.SADDLE, "Сидеть на мне (GSit)", NamedTextColor.YELLOW,
-                "Садиться на тебя: " + (noRide.contains(id) ? "§cзапрещено" : "§aразрешено")));
-        inv.setItem(16, item(Material.CLOCK, "Пинг в табе", NamedTextColor.YELLOW,
-                "Пинг: " + (pingShown.contains(id) ? "§aпоказан" : "§cскрыт")));
-        inv.setItem(22, item(Material.DIAMOND_SWORD, "PvP режим", NamedTextColor.YELLOW,
-                "PvP: " + (pvpOff.contains(id) ? "§cотключён" : "§aвключён")));
+        boolean nick = hiddenNick.contains(id);
+        boolean ride = noRide.contains(id);
+        boolean ping = pingShown.contains(id);
+        boolean pvp = pvpOff.contains(id);
+        double cur = heights.getOrDefault(id, 1.0);
+
+        inv.setItem(11, item(Material.ENDER_CHEST, "Скрыть ник", nick,
+                "§7Прячет твой ник над головой.", "",
+                "§7Сейчас: " + (nick ? "§c● Ник скрыт" : "§a● Ник виден"),
+                "", "§8» §eНажми, чтобы переключить"));
+
+        inv.setItem(12, item(Material.AMETHYST_CLUSTER, "Сменить рост", cur != 1.0,
+                "§7Выбери рост от §f" + MIN_H + " §7до §f" + MAX_H + "§7.", "",
+                "§7Сейчас: §f" + cur,
+                canHeight(p) ? "" : "§c✖ Только для Sponsor и Sponsor+",
+                canHeight(p) ? "§8» §eНажми, чтобы открыть" : ""));
+
+        inv.setItem(13, item(Material.SLIME_BLOCK, "Сидеть на мне", ride,
+                "§7Можно ли садиться на тебя (GSit).", "",
+                "§7Сейчас: " + (ride ? "§c● Запрещено" : "§a● Разрешено"),
+                "", "§8» §eНажми, чтобы переключить"));
+
+        inv.setItem(14, item(Material.SCULK_SENSOR, "Пинг в табе", ping,
+                "§7Показывает твой пинг рядом с ником в табе.", "",
+                "§7Сейчас: " + (ping ? "§a● Показан" : "§c● Скрыт"),
+                "", "§8» §eНажми, чтобы переключить"));
+
+        inv.setItem(15, item(Material.MACE, "PvP режим", pvp,
+                "§7Отключает урон от игроков и по тебе.", "",
+                "§7Сейчас: " + (pvp ? "§c● PvP отключён" : "§a● PvP включён"),
+                "", "§8» §eНажми, чтобы переключить"));
+
+        inv.setItem(22, item(Material.BARRIER, "Закрыть", false, "§7Закрыть меню."));
         p.openInventory(inv);
     }
 
     private void openHeight(Player p) {
+        UUID id = p.getUniqueId();
+        double cur = heights.getOrDefault(id, 1.0);
         Holder h = new Holder(Type.HEIGHT);
         Inventory inv = Bukkit.createInventory(h, 36, title());
         h.inv = inv;
+        fill(inv);
+
         for (int i = 0; i < HEIGHT_SLOTS.length; i++) {
-            double v = Math.round((MIN_H + i * 0.1) * 10) / 10.0;
-            inv.setItem(HEIGHT_SLOTS[i], item(Material.GOLD_NUGGET, "Рост " + v, NamedTextColor.YELLOW, "Нажми, чтобы выбрать"));
+            double v = heightAt(i);
+            boolean sel = Math.abs(cur - v) < 0.001;
+            ItemStack it = item(Material.AMETHYST_SHARD, "Рост " + v, sel,
+                    "§7Выбрать рост §f" + v, "",
+                    sel ? "§a✔ Сейчас выбран" : "§8» §eНажми, чтобы выбрать");
+            it.setAmount((int) Math.round(v * 10));
+            inv.setItem(HEIGHT_SLOTS[i], it);
         }
-        inv.setItem(23, item(Material.LIME_DYE, "Сбросить (1.0)", NamedTextColor.GREEN));
-        inv.setItem(24, item(Material.WRITABLE_BOOK, "Свой рост", NamedTextColor.AQUA,
-                "Введи любое число от " + MIN_H + " до " + MAX_H + " в чат"));
-        inv.setItem(31, item(Material.ARROW, "Назад", NamedTextColor.WHITE));
+        inv.setItem(30, item(Material.LIME_DYE, "Сбросить (1.0)", false, "§7Вернуть обычный рост."));
+        inv.setItem(31, item(Material.ARROW, "Назад", false, "§7Вернуться в настройки."));
+        inv.setItem(32, item(Material.WRITABLE_BOOK, "Свой рост", false,
+                "§7Введи любое число от §f" + MIN_H + " §7до §f" + MAX_H, "§7в чат, например §f0.75"));
         p.openInventory(inv);
     }
 
+    private double heightAt(int i) {
+        return Math.round((MIN_H + i * 0.1) * 10) / 10.0;
+    }
+
+    // ================= клики =================
     @EventHandler
     public void onClick(InventoryClickEvent e) {
         if (!(e.getInventory().getHolder() instanceof Holder h)) return;
@@ -172,38 +270,42 @@ public class SettingsPlugin extends JavaPlugin implements Listener, CommandExecu
 
         if (h.type == Type.MAIN) {
             switch (slot) {
-                case 10 -> { toggle(hiddenNick, id); applyNick(p); }
+                case 11 -> { toggle(hiddenNick, id); applyNick(p); }
                 case 12 -> {
-                    if (!canHeight(p)) { p.sendMessage("§cСмена роста доступна только для Sponsor и Sponsor+."); return; }
+                    if (!canHeight(p)) {
+                        sound(p, Sound.ENTITY_VILLAGER_NO, 1f);
+                        msg(p, "§cСмена роста доступна только для Sponsor и Sponsor+.");
+                        return;
+                    }
+                    sound(p, Sound.UI_BUTTON_CLICK, 1.2f);
                     openHeight(p);
                     return;
                 }
-                case 14 -> toggle(noRide, id);
-                case 16 -> {
+                case 13 -> toggle(noRide, id);
+                case 14 -> {
                     toggle(pingShown, id);
                     if (pingShown.contains(id)) updatePing(p);
                     else p.playerListName(null);
                 }
-                case 22 -> toggle(pvpOff, id);
+                case 15 -> toggle(pvpOff, id);
+                case 22 -> { sound(p, Sound.UI_BUTTON_CLICK, 0.8f); p.closeInventory(); return; }
                 default -> { return; }
             }
+            sound(p, Sound.BLOCK_AMETHYST_BLOCK_CHIME, 1.4f);
             saveData();
             openMain(p);
         } else {
             if (!canHeight(p)) { p.closeInventory(); return; }
-            if (slot == 31) { openMain(p); return; }
-            if (slot == 23) { setHeight(p, 1.0); return; }
-            if (slot == 24) {
+            if (slot == 31) { sound(p, Sound.UI_BUTTON_CLICK, 0.8f); openMain(p); return; }
+            if (slot == 30) { setHeight(p, 1.0); return; }
+            if (slot == 32) {
                 awaitingHeight.add(id);
                 p.closeInventory();
-                p.sendMessage("§eВведи рост от " + MIN_H + " до " + MAX_H + " в чат (или «cancel»).");
+                msg(p, "§eВведи рост от §f" + MIN_H + " §eдо §f" + MAX_H + " §eв чат §7(или «cancel»).");
                 return;
             }
             for (int i = 0; i < HEIGHT_SLOTS.length; i++) {
-                if (HEIGHT_SLOTS[i] == slot) {
-                    setHeight(p, Math.round((MIN_H + i * 0.1) * 10) / 10.0);
-                    return;
-                }
+                if (HEIGHT_SLOTS[i] == slot) { setHeight(p, heightAt(i)); return; }
             }
         }
     }
@@ -217,13 +319,17 @@ public class SettingsPlugin extends JavaPlugin implements Listener, CommandExecu
         if (!set.remove(id)) set.add(id);
     }
 
-    // ---------- ник ----------
+    // ================= ник / пинг =================
     private void applyNick(Player p) {
         if (hiddenNick.contains(p.getUniqueId())) hiddenTeam.addEntry(p.getName());
         else hiddenTeam.removeEntry(p.getName());
     }
 
-    // ---------- рост ----------
+    private void updatePing(Player p) {
+        p.playerListName(LEGACY.deserialize(p.getName() + " §7" + p.getPing() + "ms"));
+    }
+
+    // ================= рост =================
     private AttributeInstance scale(Player p) {
         Attribute a = Registry.ATTRIBUTE.get(NamespacedKey.minecraft("scale"));
         return a == null ? null : p.getAttribute(a);
@@ -232,11 +338,12 @@ public class SettingsPlugin extends JavaPlugin implements Listener, CommandExecu
     private void setHeight(Player p, double v) {
         v = Math.max(MIN_H, Math.min(MAX_H, v));
         AttributeInstance at = scale(p);
-        if (at == null) { p.sendMessage("§cЭта версия не поддерживает смену роста."); return; }
+        if (at == null) { msg(p, "§cЭта версия не поддерживает смену роста."); return; }
         at.setBaseValue(v);
         heights.put(p.getUniqueId(), v);
         saveData();
-        p.sendMessage("§aРост изменён: §f" + v);
+        sound(p, Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.3f);
+        msg(p, "§aРост изменён: §f" + v);
         openHeight(p);
     }
 
@@ -246,22 +353,22 @@ public class SettingsPlugin extends JavaPlugin implements Listener, CommandExecu
         Player p = e.getPlayer();
         if (!awaitingHeight.contains(p.getUniqueId())) return;
         e.setCancelled(true);
-        String msg = e.getMessage().trim();
+        String text = e.getMessage().trim();
         Bukkit.getScheduler().runTask(this, () -> {
             awaitingHeight.remove(p.getUniqueId());
-            if (msg.equalsIgnoreCase("cancel")) { p.sendMessage("§7Отменено."); return; }
+            if (text.equalsIgnoreCase("cancel")) { msg(p, "§7Отменено."); return; }
             if (!canHeight(p)) return;
             try {
-                double v = Double.parseDouble(msg.replace(',', '.'));
-                if (v < MIN_H || v > MAX_H) { p.sendMessage("§cДопустимо от " + MIN_H + " до " + MAX_H + "."); return; }
+                double v = Double.parseDouble(text.replace(',', '.'));
+                if (v < MIN_H || v > MAX_H) { msg(p, "§cДопустимо от " + MIN_H + " до " + MAX_H + "."); return; }
                 setHeight(p, v);
             } catch (NumberFormatException ex) {
-                p.sendMessage("§cЭто не число.");
+                msg(p, "§cЭто не число.");
             }
         });
     }
 
-    // ---------- вход игрока ----------
+    // ================= вход / выход =================
     @EventHandler
     public void onJoin(PlayerJoinEvent e) {
         Player p = e.getPlayer();
@@ -275,7 +382,12 @@ public class SettingsPlugin extends JavaPlugin implements Listener, CommandExecu
         }
     }
 
-    // ---------- посадка на игрока ----------
+    @EventHandler
+    public void onQuit(PlayerQuitEvent e) {
+        awaitingHeight.remove(e.getPlayer().getUniqueId());
+    }
+
+    // ================= посадка на игрока =================
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onInteract(PlayerInteractEntityEvent e) {
         if (e.getRightClicked() instanceof Player t && noRide.contains(t.getUniqueId())) {
@@ -289,7 +401,7 @@ public class SettingsPlugin extends JavaPlugin implements Listener, CommandExecu
         if (e.getMount() instanceof Player t && noRide.contains(t.getUniqueId())) e.setCancelled(true);
     }
 
-    // ---------- PvP ----------
+    // ================= PvP =================
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onDamage(EntityDamageByEntityEvent e) {
         if (!(e.getEntity() instanceof Player victim)) return;
@@ -307,7 +419,7 @@ public class SettingsPlugin extends JavaPlugin implements Listener, CommandExecu
         }
     }
 
-    // ---------- сохранение ----------
+    // ================= сохранение =================
     private void loadData() {
         if (!dataFile.exists()) return;
         YamlConfiguration y = YamlConfiguration.loadConfiguration(dataFile);
