@@ -1,0 +1,5 @@
+# Права, дающие доступ к смене роста (группы sponsor и sponsor+ в LuckPerms)
+height-permissions:
+  - group.sponsor
+  - group.sponsor+
+  - settings.height

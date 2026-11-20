@@ -1,0 +1,7 @@
+name: Settings
+main: me.settings.SettingsPlugin
+version: 1.0
+api-version: '1.21'
+commands:
+  settings:
+    description: Меню настроек
